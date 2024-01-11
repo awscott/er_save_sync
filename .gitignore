@@ -5,4 +5,5 @@ __pycache__/
 target/
 venv/
 sync.log
+file_sync.log
 update_log.txt
