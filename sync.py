@@ -9,11 +9,12 @@ import pathlib
 import traceback
 
 # log to file to check for errors later
-LOGGER = logging.basicConfig(
-    format='%(asctime)s %(message)s',
-    filename='file_sync.log', encoding='utf-8',
-    level=logging.INFO
-)
+def setup_logging(logfile='file_sync.log'):
+    LOGGER = logging.basicConfig(
+        format='%(asctime)s %(message)s',
+        filename=logfile, encoding='utf-8',
+        level=logging.INFO
+    )
 
 # add args to this script for easy calling in steamdeck game mode
 parser = argparse.ArgumentParser(
@@ -25,8 +26,8 @@ parser.add_argument("-d", "--download", action="store_true")
 # parser.add_argument("-s", "--sync") # todo
 
 s3 = boto3.client('s3')
-upload_count = 0
-download_count = 0
+
+UPDATE_LOG = './update_log.txt'
 
 def msg(message):
     os.system(f"zenity --no-markup --info --text='{message}'")
@@ -43,6 +44,7 @@ def catch_exc(func):
         else:
             body = f'Successful {func.__name__}! Synced the following {len(results)} file(s):\n' + '\n'.join(results)
             msg(body)
+            return results
     return wrapper
 
 @catch_exc
@@ -57,9 +59,9 @@ def upload(path, bucket, legal_extensions):
                         s3.upload_fileobj(fileobj, bucket, file)
                     uploaded.append(file)
 
-    with open('./update_log.txt', 'a') as update_log:
-        update_log.write('\n' + f'Uploaded {len(uploaded)} files to S3 on ' + str(datetime.now()))
+    log_sync(uploaded, "Upload")
     return uploaded
+
 
 @catch_exc
 def download(path, bucket, legal_extensions):
@@ -73,11 +75,27 @@ def download(path, bucket, legal_extensions):
                 s3.download_fileobj(bucket, file, f)
             downloaded.append(file)
 
-    with open('./update_log.txt', 'a') as update_log:
-        update_log.write('\n' + f'Downloaded {len(downloaded)} files from S3 on ' + str(datetime.now()))
+    log_sync(downloaded, "Download")
     return downloaded
 
+
+def log_sync(files, sync_type):
+    with open(UPDATE_LOG, 'a') as update_log:
+        update_log.write('\n' + f'{sync_type}ed {len(files)} files with S3 on ' + str(datetime.now()))
+
+
 def valid_extension(file, legal_extensions):
+    """Check if file is in allowlist
+
+    file[str]: filename or path
+    legal_extensions[list or None]:
+        upload files whos extensions are in the list,
+        if None upload anything
+    """
+
+    if legal_extensions is None:
+        return True
+
     for extension in legal_extensions:
         if file[-len(extension):] == extension:
             return True
