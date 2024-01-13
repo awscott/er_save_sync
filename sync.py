@@ -8,6 +8,8 @@ import os
 import pathlib
 import traceback
 
+from storage import get_hash, get_local_saved_hash
+
 # log to file to check for errors later
 def setup_logging(logfile='file_sync.log'):
     LOGGER = logging.basicConfig(
@@ -46,6 +48,28 @@ def catch_exc(func):
             msg(body)
             return results
     return wrapper
+
+def sync(path, bucket, legal_extensions):
+    # check if file has been updated compared to local hash
+    #   local_updated = True
+    # check if local has same hash as remote
+    #   if local == remote && local_updated: upload()
+    #   elif local != remote && local_updated: warn_about_out_of_sync()
+    #   elif local != remote and not local_updated:
+    #       #this means since last download/upload we havent changed the file there must be a new one in s3
+    #       if local_last_modified <= remote_last_modified:
+    #           download()
+    #        else: # this only happens if we fail during upload
+    #            msg("since last download/upload we havent changed the file"
+    #                "and our hash is differnt however our file still looks to"
+    #                "be newer. this means the db state is messed up and needs"
+    #                "attention. run and upload or download with --force."
+    #            )
+    #   elif local == remote && !local_updated:
+    #      msg("nothing to do, its already synced!")
+    filename = os.path.basename(path)
+    file_hash = get_hash(path)
+    local_hash = get_local_saved_hash(filename, bucket)
 
 @catch_exc
 def upload(path, bucket, legal_extensions):
@@ -116,13 +140,18 @@ def get_extensions_to_sync():
                legal_extensions.append(line.strip())
     return legal_extensions
 
+
+
 if __name__ == "__main__":
+    setup_logging()
     args = parser.parse_args()
     save_path, bucket = get_sync_paths()
     legal_extensions = get_extensions_to_sync()
     logging.info(f"Starting run {str(args)}")
     if args.upload:
         upload(save_path, bucket, legal_extensions)
-    if args.download:
+    elif args.download:
         download(save_path, bucket, legal_extensions)
+    else:
+        sync(save_path, bucket, legal_extensions)
     logging.info(f"END RUN\n")

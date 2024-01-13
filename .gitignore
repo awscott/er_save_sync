@@ -6,4 +6,6 @@ target/
 venv/
 sync.log
 file_sync.log
+*.db
 update_log.txt
+config.py
