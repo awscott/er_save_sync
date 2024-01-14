@@ -8,7 +8,7 @@ import os
 import pathlib
 import traceback
 
-from storage import get_hash, get_local_saved_hash
+from storage import get_hash, get_local_saved_hash, get_remote_hash
 
 # log to file to check for errors later
 def setup_logging(logfile='file_sync.log'):
@@ -49,30 +49,68 @@ def catch_exc(func):
             return results
     return wrapper
 
-def sync(path, bucket, legal_extensions):
-    # check if file has been updated compared to local hash
-    #   local_updated = True
-    # check if local has same hash as remote
-    #   if local == remote && local_updated: upload()
-    #   elif local != remote && local_updated: warn_about_out_of_sync()
-    #   elif local != remote and not local_updated:
-    #       #this means since last download/upload we havent changed the file there must be a new one in s3
-    #       if local_last_modified <= remote_last_modified:
-    #           download()
-    #        else: # this only happens if we fail during upload
-    #            msg("since last download/upload we havent changed the file"
-    #                "and our hash is differnt however our file still looks to"
-    #                "be newer. this means the db state is messed up and needs"
-    #                "attention. run and upload or download with --force."
-    #            )
-    #   elif local == remote && !local_updated:
-    #      msg("nothing to do, its already synced!")
+def sync(path: str, bucket: str) -> (bool, str):
+    """sync file with s3.
+    path: path to file on disk to sync
+    bucket: the bucket that hosts that file on remote
+
+    Returns: bool and str representing if successful or not and what the result
+        of the sync was
+    """
     filename = os.path.basename(path)
+    file_last_modified = os.path.getmtime(path)
     file_hash = get_hash(path)
-    local_hash = get_local_saved_hash(filename, bucket)
+    local_hash, local_last_modified  = get_local_saved_hash(filename, bucket)
+    remote_hash, remote_last_modified = get_remote_hash(filename, bucket)
+
+    local_updated = False
+    if file_hash != local_hash:
+        local_updated = True
+
+    if local_hash == remote_hash and local_updated:
+        return upload_file(path, bucket, legal_extensions)
+    elif local_hash != remote_hash and local_updated:
+        warning = (
+            "Files Out Of Sync Warning: a play sesh or file modification has "
+            "happened locally while files not in sync with remote. i.e. you "
+            "likey played on two devicees with out syncing inbetween. "
+            "Manual intervention is needed.\n\t"
+            f"{filename} modified at {file_last_modified}, was last synced for"
+            f" a version at {local_last_modified} while REMOTE version is at "
+            f"{remote_last_modified}."
+            "\n\tfile hash:{}\n\tlast synced hash: {}\n\tremote_hash:{}".format(
+                file_hash, local_hash, remote_hash
+            )
+        )
+        logging.warning(warning)
+        return False, warning
+    elif local_hash != remote_hash and not local_updated:
+        # download time (i hope)
+        if local_last_modified <= remote_last_modified:
+            return download_file()
+        else:
+            warning = (
+                "since last download/upload we havent changed the file"
+                "and our hash is differnt however our file still looks to"
+                "be newer. this means the db state is messed up and needs"
+                "attention. run and upload or download manual task."
+            )
+            logging.warning(warning)
+            return False, warning
+    else:
+        return True, f"{filename} is already up to date!"
+
+def upload_file(path, bucket):
+    pass
+
+
+def download_file(path, bucket):
+    pass
+
 
 @catch_exc
 def upload(path, bucket, legal_extensions):
+    """walk dir tree and upload all requested shiz"""
     uploaded = []
     for dirpath, dirnames, files in os.walk(path):
         for file in files:
@@ -89,6 +127,7 @@ def upload(path, bucket, legal_extensions):
 
 @catch_exc
 def download(path, bucket, legal_extensions):
+    """download everything in bucket to target dir"""
     downloaded = []
     for item in s3.list_objects(Bucket=bucket)['Contents']:
         file = item["Key"]

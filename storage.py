@@ -1,8 +1,13 @@
+import boto3
 from contextlib import contextmanager
 import hashlib
 import sqlite3
+from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
+
 
 LOCAL_DB = "filesync.db"
+class HttpStatusException(Exception):
+    pass
 
 @contextmanager
 def local_cursor():
@@ -67,9 +72,27 @@ def save_local_hash(file: str, bucket: str, hash: str, last_modified: str):
             """
         cur.execute(sql)
 
-
+@retry(
+    wait=wait_fixed(1),
+    retry=retry_if_exception_type(HttpStatusException),
+    stop=stop_after_attempt(2)
+)
 def get_remote_hash(file: str, bucket: str):
-    pass # get from rds
+    remote = boto3.resource('dynamodb')
+    table = remote.Table("filesync")
+    response = table.get_item(Key={"bucketfile":f"{bucket}_{file}"})
+    status_code = response['ResponseMetadata']['HTTPStatusCode']
+
+    if 200 <= response['ResponseMetadata']['HTTPStatusCode'] < 300:
+        item = response['Item']
+        return item["hash"], item["last_modified"]
+
+    #otherwise freakout i guess
+    raise HttpStatusException(
+        "Dynamo DB request returned non 2xx status: {}".format(
+            response['ResponseMetadata']
+        )
+    )
 
 
 def get_hash(path, buffer_size=65536):
