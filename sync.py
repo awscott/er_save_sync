@@ -1,4 +1,8 @@
+#!/usr/bin/env python
 
+#----------------------+
+# poor mans steamcloud |
+#----------------------+
 import argparse
 import boto3
 import csv
