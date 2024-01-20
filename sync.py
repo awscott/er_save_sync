@@ -263,8 +263,9 @@ def download(path, bucket, legal_extensions):
         if valid_extension(file, legal_extensions):
             downloaded.append(get_object(path, bucket, item, file))
             try:
-                file_hash = get_hash(path)
-                file_last_modified = get_file_time(path)
+                fpath = (pathlib.Path(path) / file).as_posix()
+                file_hash = get_hash(fpath)
+                file_last_modified = get_file_time(fpath)
                 save_local_hash(file, bucket, file_hash, file_last_modified)
                 save_remote_hash(file, bucket, file_hash, file_last_modified)
             except Exception as e:
