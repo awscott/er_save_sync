@@ -12,5 +12,5 @@ file = "sync.py"
 with open(file) as f:
     lines = f.readlines()
 with open(file, "w") as f:
-    lines[0] = python_location
+    lines[0] = python_location + "\n"
     f.writelines(lines)
