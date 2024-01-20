@@ -1,1 +1,1 @@
-sync.py -u
+venv\Scripts\python.exe sync.py -u
