@@ -1,11 +1,31 @@
+from datetime import datetime
 import boto3
+from botocore.exceptions import ClientError
 from contextlib import contextmanager
 import hashlib
+import os
 import sqlite3
 from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
 
 
-LOCAL_DB = "filesync.db"
+REMOTE_TABLE = "filesync" # dynamodb (it's cheap okay)
+class BucketFile:
+    # This defines how we expect our blobs in dynamodb table (filesync) to look
+    def __init__(self, filename, bucket, hash, last_modified):
+        self.bucketfile = f"{bucket}_{filename}"  # primary key in dynamo
+        self.filename = filename
+        self.bucket = bucket
+        self.hash = hash
+        self.lastmodified = last_modified
+    
+    def json(self):
+        return {
+            attr: {'S': getattr(self, attr)}
+            for attr in dir(self) if not callable(getattr(self, attr)) and not attr.startswith("__")
+        }
+
+LOCAL_DB = "filesync.db" #sqlite
+
 class HttpStatusException(Exception):
     pass
 
@@ -22,20 +42,6 @@ def local_cursor():
     connection.close()
 
 
-def update_local(bucket, path, file, modified_time):
-    """Store file info after download/upload
-
-    After downloading a file from s3 save the time we got it from s3 (now), the
-    last modified time from s3, the filename(its s3 object path), the bucket,
-    and the hash of the file. All local data stored in sqlite3
-
-    bucket[str]: name of the bucket in s3
-    path[str or posixpath]: path to the local file
-    file[str]: the name of file
-    modified_time[datetime.datetime]: time aws s3 has as the last modified time for the file.
-    """
-    pass
-
 def get_local_saved_hash(file: str, bucket: str):
     with local_cursor() as cur:
         results = cur.execute(
@@ -46,7 +52,10 @@ def get_local_saved_hash(file: str, bucket: str):
         )
         file_data = results.fetchone()
         print(file_data)
-    return file_data or None
+        if not file_data or file_data == ('None', 'None'):
+            return (None, None)
+    return file_data
+
 
 def save_local_hash(file: str, bucket: str, hash: str, last_modified: str):
     with local_cursor() as cur:
@@ -73,6 +82,20 @@ def save_local_hash(file: str, bucket: str, hash: str, last_modified: str):
         cur.execute(sql)
 
 @retry(
+    wait=wait_fixed(.5),
+    retry=retry_if_exception_type(ClientError),
+    stop=stop_after_attempt(2)
+)
+def save_remote_hash(file: str, bucket: str, hash: str, last_modified: str):
+    client = boto3.client('dynamodb')
+    dynamo_item = BucketFile(file, bucket, hash, last_modified)
+    return client.put_item(
+        TableName=REMOTE_TABLE,
+        Item=dynamo_item.json()
+    )
+
+
+@retry(
     wait=wait_fixed(1),
     retry=retry_if_exception_type(HttpStatusException),
     stop=stop_after_attempt(2)
@@ -83,9 +106,11 @@ def get_remote_hash(file: str, bucket: str):
     response = table.get_item(Key={"bucketfile":f"{bucket}_{file}"})
     status_code = response['ResponseMetadata']['HTTPStatusCode']
 
-    if 200 <= response['ResponseMetadata']['HTTPStatusCode'] < 300:
-        item = response['Item']
-        return item["hash"], item["last_modified"]
+    if 200 <= status_code < 300:
+        item = response.get('Item')
+        if item is None:
+            return None, None # doesnt exist in remote
+        return item["hash"], item["lastmodified"]
 
     #otherwise freakout i guess
     raise HttpStatusException(
@@ -95,7 +120,7 @@ def get_remote_hash(file: str, bucket: str):
     )
 
 
-def get_hash(path, buffer_size=65536):
+def get_hash(path: str, buffer_size=65536):
     """Get the sha1 hash of the the file passed"""
     sha1 = hashlib.sha1()
     with open(path, 'rb') as f:
@@ -105,3 +130,10 @@ def get_hash(path, buffer_size=65536):
                 break
             sha1.update(data)
     return sha1.hexdigest()
+
+def get_file_time(path: str):
+    file_last_modified = datetime.fromtimestamp(
+        os.path.getmtime(path)
+    ).astimezone().isoformat()
+
+    return file_last_modified
